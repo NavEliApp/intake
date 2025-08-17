@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: naveli-intake
+    env: python
+    region: oregon   # or choose closest region: oregon / ohio / frankfurt / singapore
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    plan: free  # change to starter/standard for higher resources
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false   # set in Render dashboard (not in repo for security)
