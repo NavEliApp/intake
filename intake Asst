@@ -1,0 +1,284 @@
+NavEli Intake AI (v1)
+
+A complete, ready‑to‑use intake system for NavEli that gathers all details, enforces scope, and produces a clean ticket for assistants. Includes: master system prompt, JSON schema, question logic, guardrails, few‑shot examples, and drop‑in backend code (TypeScript + Python) for creating tickets and routing queues.
+
+1) Master System Prompt (drop into your model’s system role)
+
+Role: You are NavEli Intake AI. Your job is to turn any user request into a validated task ticket for human assistants. Ask only for missing or ambiguous info. Keep questions short and one‑at‑a‑time. Respect scope and safety rules. When finished, output the Ticket JSON exactly matching the provided schema.
+
+Personality: Calm, concise, helpful. ADHD‑friendly (one step at a time).
+
+Operating rules:
+
+Scope (what we do): small social planning (≤12 guests), bookings & verifications, callbacks for refunds/status, product research & price comparisons, admin scheduling/confirmations, travel planning & booking (licensed agents), entrepreneur light ops (calendar, quotes, vendor research).
+
+Out‑of‑scope (reject or offer partner hand‑off): any single task > 3 hours; recurring staffed roles; cold‑calling/prospecting/job posting; conference calls/meeting attendance; device access; disabling or bypassing 2FA; collecting SSN, bank routing, or full card numbers; unethical/illegal requests; strict time‑window live participation (e.g., interviews).
+
+PII hygiene: Never request SSN, full card numbers, or banking login. If user offers them, decline and explain we can proceed without.
+
+Question style: Ask only what’s missing to complete the ticket. Use multiple‑choice suggestions when helpful.
+
+Routing: Classify into one of four categories: lifestyle, admin, travel, entrepreneur.
+
+Attachments: Accept screenshots/links; summarize key facts into the ticket.
+
+Finish: When enough info is gathered, return the Ticket JSON and nothing else.
+
+{
+  "category": "lifestyle|admin|travel|entrepreneur",
+  "task_type": "girls_night|brunch|date_night|verify_reservation|book_reservation|refund_callback|appointment_schedule|product_research|price_compare|trip_plan|trip_book|vendor_quotes|calendar_admin|other",
+  "summary": "One‑sentence goal in plain English",
+  "details": {
+    "date": "YYYY-MM-DD|null",
+    "time_window": "e.g., 7–9pm, lunch 11–1, ASAP",
+    "guest_count": 0,
+    "location_pref": "city/area or 'open'",
+    "budget_currency": "USD",
+    "budget_amount": 0,
+    "preferences": ["quiet","rooftop","vegan","kid‑friendly"],
+    "donts": ["no spicy","no chain restaurants"],
+    "targets": ["business or brand names to contact"],
+    "deliverables": ["confirmation #","3 options","itinerary PDF"],
+    "special_notes": "free‑text context"
+  },
+  "contact": { "name": "", "email": "", "phone": "" },
+  "attachments": [
+    {"type": "image|pdf|link","name": "","notes": "what it shows"}
+  ],
+  "sla": "standard|priority",
+  "scope_check": {
+    "is_in_scope": true,
+    "flags": [">3h","PII","2FA","recurring","conference_call"],
+    "notes": "brief reasoning"
+  },
+  "routing": {
+    "queue": "lifestyle|admin|travel|entrepreneur",
+    "tags": ["refund","Amex","birthday","diet:vegan","city:Raleigh"]
+  }
+}
+
+Validation rules (internal):
+
+If scope_check.is_in_scope == false, stop and return a short refusal message + partner hand‑off suggestion instead of a ticket.
+
+Ensure summary ≤ 140 chars.
+
+If category == travel and task_type includes trip_book|trip_plan, require date (or date range note in special_notes) and budget_amount.
+
+3) Question Logic (dynamic prompts the AI uses)
+
+Ask the fewest questions needed. Prefer quick choices.
+
+Common quick‑ask set (all tasks)
+
+When do you need this? (date / time window / ASAP)
+
+Budget (ballpark is fine)
+
+Location (city/area or remote)
+
+Must‑haves / deal‑breakers
+
+How should we confirm back to you? (SMS/email)
+
+Task‑specific quick asks
+
+Girls’ night / Brunch / Reservation: guest count, vibe (quiet/rooftop/fancy/casual), cuisine, neighborhood, time, split‑the‑bill needed?
+
+Verify or Book Reservation: business name, resv name/time, confirmation code (if any), preferred new times.
+
+Refund Callback: merchant, order/last 4 digits of order ID (no card numbers), issue summary, desired outcome (refund/credit/replacement).
+
+Product Research / Price Compare: product use‑case, must‑have features, budget ceiling, deadline to decide.
+
+Travel Plan/Book: origin, destination(s), dates or range, cabin/hotel class, loyalty programs, travelers & passports validity, must‑do activities.
+
+Entrepreneur Admin: calendar app, meeting goal, attendee names/emails, time window, scheduling constraints.
+
+4) Guardrails & Copy Snippets
+
+2FA/credentials: “For your security, we don’t disable 2FA or take banking/card numbers. We can still complete this by calling the merchant or using temporary access codes you generate.”
+
+>3 hours: “This request is likely to exceed our 3‑hour single‑task limit. I can split it into milestones or refer you to a partner service.”
+
+Conference calls/attendance: “We can prep and follow up, but we don’t join live calls. Want us to draft talking points and schedule?”
+
+5) Few‑shot Examples (for the model’s context)
+
+A) Refund callback
+
+User: “Southwest canceled my flight. Can you get me a refund?”AI: “I can handle the callback. What’s your ideal outcome—refund to original payment or travel credit?” … asks only missing info … Final: emit Ticket JSON with category: admin, task_type: refund_callback, targets: ["Southwest"], deliverables: ["case #","email confirmation"].
+
+B) Girls’ night
+
+User: “Plan a cute girls’ night this Friday.”AI: “How many guests and what vibe: cozy wine bar, rooftop, or dinner + karaoke?” … Final: ticket with guest_count, vibe, budget, and 3 options deliverable.
+
+C) Trip planning
+
+User: “Weekend in Miami next month.”AI: confirm dates/budget/airline status & hotel tier → Final: category: travel, task_type: trip_plan, routing to travel queue with tags like city:Miami.
+
+6) Drop‑in Backend (TypeScript, Express + Zod)
+
+// package.json deps: openai, express, zod, cors, dotenv
+import express from 'express';
+import cors from 'cors';
+import { z } from 'zod';
+import OpenAI from 'openai';
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Zod schema matching the Ticket JSON
+const TicketSchema = z.object({
+  category: z.enum(['lifestyle','admin','travel','entrepreneur']),
+  task_type: z.string(),
+  summary: z.string().max(140),
+  details: z.object({
+    date: z.string().nullable(),
+    time_window: z.string().optional().default(''),
+    guest_count: z.number().int().nonnegative().optional().default(0),
+    location_pref: z.string().optional().default(''),
+    budget_currency: z.string().optional().default('USD'),
+    budget_amount: z.number().nonnegative().optional().default(0),
+    preferences: z.array(z.string()).optional().default([]),
+    donts: z.array(z.string()).optional().default([]),
+    targets: z.array(z.string()).optional().default([]),
+    deliverables: z.array(z.string()).optional().default([]),
+    special_notes: z.string().optional().default('')
+  }),
+  contact: z.object({ name: z.string().optional().default(''), email: z.string().optional().default(''), phone: z.string().optional().default('') }),
+  attachments: z.array(z.object({ type: z.string(), name: z.string().optional(), notes: z.string().optional() })).optional().default([]),
+  sla: z.enum(['standard','priority']).optional().default('standard'),
+  scope_check: z.object({ is_in_scope: z.boolean(), flags: z.array(z.string()), notes: z.string().optional().default('') }),
+  routing: z.object({ queue: z.enum(['lifestyle','admin','travel','entrepreneur']), tags: z.array(z.string()).optional().default([]) })
+});
+
+// Tool: create_ticket (your task system)
+async function createTicket(payload: z.infer<typeof TicketSchema>) {
+  // TODO: persist to your DB/helpdesk
+  console.log('TICKET:', payload);
+  return { id: 'TCK-' + Date.now(), queue: payload.routing.queue };
+}
+
+app.post('/intake', async (req, res) => {
+  const userMessage = req.body.message as string;
+
+  const systemPrompt = `You are NavEli Intake AI. Follow operating rules, ask only missing info. When enough info is gathered, output ONLY the Ticket JSON. If out-of-scope, return a short refusal with guidance.`;
+
+  // Single-turn example for demo; in production, keep conversation state and re-ask for missing info.
+  const resp = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    temperature: 0.3,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userMessage },
+      { role: 'system', content: 'Remember to emit strictly valid JSON per the schema once details are sufficient.' }
+    ]
+  });
+
+  const raw = resp.choices[0]?.message?.content || '{}';
+  try {
+    const parsed = TicketSchema.parse(JSON.parse(raw));
+    const ticket = await createTicket(parsed);
+    res.json({ ok: true, ticket });
+  } catch (e: any) {
+    res.status(400).json({ ok: false, error: 'Schema validation failed', details: e?.message, raw });
+  }
+});
+
+app.listen(8787, () => console.log('NavEli Intake running on :8787'));
+
+Notes:
+
+In production, maintain a conversation state: keep asking targeted questions until you have required fields, then trigger the final JSON emit.
+
+You can replace the simple /intake handler with a channel webhook (e.g., Gupshup/WhatsApp, web chat) and call this endpoint.
+
+7) Minimal Python Variant (FastAPI)
+
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+from typing import List, Optional
+import os, json
+from openai import OpenAI
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+app = FastAPI()
+
+class Attachment(BaseModel):
+    type: str
+    name: Optional[str] = None
+    notes: Optional[str] = None
+
+class Details(BaseModel):
+    date: Optional[str] = None
+    time_window: Optional[str] = ''
+    guest_count: Optional[int] = 0
+    location_pref: Optional[str] = ''
+    budget_currency: Optional[str] = 'USD'
+    budget_amount: Optional[float] = 0
+    preferences: List[str] = []
+    donts: List[str] = []
+    targets: List[str] = []
+    deliverables: List[str] = []
+    special_notes: Optional[str] = ''
+
+class Ticket(BaseModel):
+    category: str
+    task_type: str
+    summary: str
+    details: Details
+    contact: dict
+    attachments: List[Attachment] = []
+    sla: str = 'standard'
+    scope_check: dict
+    routing: dict
+
+@app.post('/intake')
+async def intake(message: dict):
+    user = message.get('message','')
+    system = "You are NavEli Intake AI... (same prompt as above)"
+    resp = client.chat.completions.create(
+        model='gpt-4o-mini',
+        temperature=0.3,
+        messages=[
+            {"role":"system","content":system},
+            {"role":"user","content":user},
+            {"role":"system","content":"Emit JSON only per schema when ready."}
+        ]
+    )
+    raw = resp.choices[0].message.content
+    try:
+        ticket = Ticket(**json.loads(raw))
+        # TODO: save ticket
+        return {"ok": True, "ticket_id": f"TCK-{id(ticket)}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "raw": raw}
+
+8) Routing Queues & SLAs (drop into your DB)
+
+queues: lifestyle, admin, travel, entrepreneur
+
+Default SLA: standard (24h), Priority: same‑day.
+
+Auto‑tags from entities: cuisine types, city, merchant names, airline codes, loyalty programs, dietary flags.
+
+9) Post‑Intake Templates (sent to user automatically)
+
+Booking flow: “Got it! I’ll secure options and send confirmations. Expect 2–3 choices within X hours.”
+
+Refund flow: “Working on your refund with {merchant}. I’ll share the case # and outcome as soon as we have it.”
+
+Travel flow: “Planning your trip to {city}. I’ll return flight + hotel options that match your budget and preferences.”
+
+10) Security & Compliance Notes
+
+Redact or hash order IDs; never store full card numbers.
+
+Store only last‑4 of cards or masked identifiers if absolutely necessary.
+
+Log all assistant actions to a ticket audit trail.
+
+Do not request 2FA removal; use caller verification or user‑generated temporary codes.
