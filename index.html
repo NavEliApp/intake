@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NavEli Intake AI</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; }
+    h1 { text-align: center; }
+    #chat { border: 1px solid #ccc; padding: 15px; height: 400px; overflow-y: auto; margin-bottom: 10px; background: #fafafa; }
+    .msg { margin: 5px 0; padding: 8px 10px; border-radius: 6px; max-width: 80%; }
+    .user { background: #d1ecf1; margin-left: auto; }
+    .bot { background: #f8d7da; margin-right: auto; }
+    #inputBox { width: 80%; padding: 10px; }
+    #sendBtn { padding: 10px; }
+  </style>
+</head>
+<body>
+  <h1>NavEli Intake AI</h1>
+  <div id="chat"></div>
+  <input id="inputBox" type="text" placeholder="Type your request..." />
+  <button id="sendBtn">Send</button>
+
+  <script>
+    const API_URL = "https://<your-app-name>.onrender.com/intake"; // <-- replace with your Render URL
+    const chatBox = document.getElementById("chat");
+    const inputBox = document.getElementById("inputBox");
+    const sendBtn = document.getElementById("sendBtn");
+
+    function addMessage(text, cls) {
+      const div = document.createElement("div");
+      div.className = `msg ${cls}`;
+      div.textContent = text;
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    async function sendMessage() {
+      const text = inputBox.value.trim();
+      if (!text) return;
+      addMessage(text, "user");
+      inputBox.value = "";
+
+      try {
+        const res = await fetch(API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          addMessage(JSON.stringify(data, null, 2), "bot");
+        } else {
+          addMessage("Error: " + (data.error || "Something went wrong"), "bot");
+        }
+      } catch (err) {
+        addMessage("⚠️ Network error: " + err.message, "bot");
+      }
+    }
+
+    sendBtn.addEventListener("click", sendMessage);
+    inputBox.addEventListener("keypress", (e) => {
+      if (e.key === "Enter") sendMessage();
+    });
+  </script>
+</body>
+</html>
